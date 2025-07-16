@@ -1,6 +1,6 @@
 # Backup restoring Mechanism Implementation Guide
 
-This guide outlines the steps to implement a restore restoring mechanism utilizing AWS S3 storage, cron jobs, and shell scripts.
+This guide outlines the steps to implement a backup restoring mechanism utilizing AWS S3 storage, cron jobs, and shell scripts.
 
 ## Step 1: Install AWS SDK
 
