@@ -1,4 +1,4 @@
-# restore restoring Mechanism Implementation Guide
+# Backup restoring Mechanism Implementation Guide
 
 This guide outlines the steps to implement a restore restoring mechanism utilizing AWS S3 storage, cron jobs, and shell scripts.
 
