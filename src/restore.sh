@@ -25,7 +25,7 @@ if [[ $? -eq 0 ]]; then
   sudo tar -xzf "$LATEST_FILE"
   sudo rm -rf "$TARGET_PATH"
   sudo mkdir "$TARGET_PATH"
-  sudo cp -R ".$TARGET_PATH" "$TARGET_PATH"
+  sudo cp -R ".$TARGET_PATH" "$(dirname "$TARGET_PATH")"
   sudo rm -rf "./$(echo "$TARGET_PATH" | cut -d'/' -f2)"
   sudo rm -rf "$LATEST_FILE"
   sudo docker start $TARGET_CONTAINER
