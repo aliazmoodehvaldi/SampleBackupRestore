@@ -22,6 +22,9 @@ LATEST_FILE="./backup.tar.gz"
 
 if [[ $? -eq 0 ]]; then
   sudo docker stop $TARGET_CONTAINER
+  if [[ -n "$SECOND_CONTAINER" ]]; then
+    sudo docker stop $SECOND_CONTAINER
+  fi
   sudo tar -xzf "$LATEST_FILE"
   sudo rm -rf "$TARGET_PATH"
   sudo mkdir "$TARGET_PATH"
@@ -29,6 +32,9 @@ if [[ $? -eq 0 ]]; then
   sudo rm -rf "./$(echo "$TARGET_PATH" | cut -d'/' -f2)"
   sudo rm -rf "$LATEST_FILE"
   sudo docker start $TARGET_CONTAINER
+  if [[ -n "$SECOND_CONTAINER" ]]; then
+    sudo docker start $SECOND_CONTAINER
+  fi
 else
   echo "Failed to download the file."
   exit 2

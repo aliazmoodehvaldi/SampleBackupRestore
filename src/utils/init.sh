@@ -19,11 +19,12 @@ fi
 
 # Define the list of environment variable names
 env_variables=(
+	"SECOND_CONTAINER"
+	"TARGET_CONTAINER"
 	"ENDPOINT_URL"
 	"PROJECT_NAME"
 	"SCRIPT_PATH"
 	"TARGET_PATH"
-	"TARGET_CONTAINER"
 	"S3_BUCKET"
 )
 

@@ -40,6 +40,7 @@ sudo apt-get install cron
 | TARGET_PATH          | String | true     | The address of the restore path              |
 | PROJECT_NAME         | String | false    | Choosing project name for final restore file |
 | TARGET_CONTAINER     | String | true     | Target docker container                      |
+| SECOND_CONTAINER     | String | false    | Second docker container                      |
 
 ### Example
 
