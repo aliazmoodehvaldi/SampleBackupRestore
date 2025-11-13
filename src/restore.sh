@@ -108,4 +108,10 @@ if $ERROR_FOUND; then
   fi
 else
   echo "✅ No fatal MongoDB error detected. No restore needed."
+
+  echo "🚀 Starting containers..."
+  sudo docker start $TARGET_CONTAINER
+  if [[ -n "$SECOND_CONTAINER" ]]; then
+    sudo docker start $SECOND_CONTAINER
+  fi
 fi
