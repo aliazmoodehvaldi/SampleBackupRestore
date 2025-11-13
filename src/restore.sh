@@ -42,12 +42,6 @@ sudo cp -R ".$TARGET_PATH" "$(dirname "$TARGET_PATH")"
 sudo rm -rf "./$(echo "$TARGET_PATH" | cut -d'/' -f2)"
 sudo rm -f "$LATEST_FILE"
 
-echo "🚀 Starting containers..."
-sudo docker start $TARGET_CONTAINER
-if [[ -n "$SECOND_CONTAINER" ]]; then
-  sudo docker start $SECOND_CONTAINER
-fi
-
 echo "⏳ Monitoring MongoDB logs..."
 MAX_WAIT=120
 COUNTER=0
@@ -102,6 +96,12 @@ if $ERROR_FOUND; then
 
   if [[ $? -eq 0 ]]; then
     echo "✅ Database restored successfully."
+
+    echo "🚀 Starting containers..."
+    sudo docker start $TARGET_CONTAINER
+    if [[ -n "$SECOND_CONTAINER" ]]; then
+      sudo docker start $SECOND_CONTAINER
+    fi
   else
     echo "❌ Database restore failed."
     exit 4
