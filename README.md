@@ -41,6 +41,7 @@ sudo apt-get install cron
 | PROJECT_NAME         | String | false    | Choosing project name for final restore file |
 | MONGO_USERNAME       | String | false    | MongoDB username                             |
 | MONGO_PASSWORD       | String | false    | MongoDB password                             |
+| FORCE_RESTORE        | Boolean| false    | Force Restore data with MongoRestore         |
 | TARGET_CONTAINER     | String | true     | Target docker container                      |
 | SECOND_CONTAINER     | String | false    | Second docker container                      |
 

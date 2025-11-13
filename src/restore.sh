@@ -3,6 +3,8 @@
 base_path=$(echo $1 | sed 's/.*=//')
 . "$base_path/utils/init.sh" $base_path
 
+FORCE_RESTORE=${FORCE_RESTORE:-false}
+
 LATEST_FILE=$(aws s3api list-objects-v2 \
   --endpoint-url "$ENDPOINT_URL" \
   --bucket "$S3_BUCKET" \
@@ -42,30 +44,37 @@ sudo cp -R ".$TARGET_PATH" "$(dirname "$TARGET_PATH")"
 sudo rm -rf "./$(echo "$TARGET_PATH" | cut -d'/' -f2)"
 sudo rm -f "$LATEST_FILE"
 
-echo "⏳ Monitoring MongoDB logs..."
-MAX_WAIT=120
-COUNTER=0
 ERROR_FOUND=false
 
-while [[ $COUNTER -lt $MAX_WAIT ]]; do
-  LOGS=$(sudo docker logs $TARGET_CONTAINER 2>&1 | tail -n 50)
+if [[ "$FORCE_RESTORE" != "true" ]]; then
+  echo "⏳ Monitoring MongoDB logs..."
+  MAX_WAIT=120
+  COUNTER=0
 
-  if echo "$LOGS" | grep -q "50883"; then
-    echo "⚠️ MongoDB fatal assertion 50883 detected."
-    ERROR_FOUND=true
-    break
-  fi
+  while [[ $COUNTER -lt $MAX_WAIT ]]; do
+    LOGS=$(sudo docker logs $TARGET_CONTAINER 2>&1 | tail -n 50)
 
-  if echo "$LOGS" | grep -q "Waiting for connections"; then
-    echo "✅ MongoDB started successfully."
-    break
-  fi
+    if echo "$LOGS" | grep -q "50883"; then
+      echo "⚠️ MongoDB fatal assertion 50883 detected."
+      ERROR_FOUND=true
+      break
+    fi
 
-  sleep 2
-  ((COUNTER+=2))
-done
+    if echo "$LOGS" | grep -q "Waiting for connections"; then
+      echo "✅ MongoDB started successfully."
+      break
+    fi
 
-if $ERROR_FOUND; then
+    sleep 2
+    ((COUNTER+=2))
+  done
+else
+  echo "⚡ FORCE_RESTORE=true, skipping MongoDB log monitoring."
+  ERROR_FOUND=true
+fi
+
+
+if $ERROR_FOUND || [[ "$FORCE_RESTORE" == "true" ]]; then
   echo "⚠️ Starting recovery mode..."
 
   DUMP_FILE=$(find "$TARGET_PATH" -type f -name "*.dump" | head -n 1)
@@ -81,12 +90,12 @@ if $ERROR_FOUND; then
   echo "🧹 Cleaning target path except dump file..."
   find "$TARGET_PATH" -mindepth 1 -not -name "$DUMP_NAME" -exec sudo rm -rf {} +
 
-  echo "🔁 Restarting Mongo container..."
-  sudo docker restart $TARGET_CONTAINER
+  echo "🔁 Starting Mongo container..."
+  sudo docker start $TARGET_CONTAINER
 
   echo "⏳ Waiting for MongoDB to be ready..."
   until sudo docker logs $TARGET_CONTAINER 2>&1 | grep -q "Waiting for connections"; do
-    sleep 2
+    sleep 60
   done
 
   echo "♻️ Restoring database from /data/db/$DUMP_NAME ..."
