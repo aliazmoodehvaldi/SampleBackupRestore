@@ -96,22 +96,16 @@ if $ERROR_FOUND; then
 
   if [[ $? -eq 0 ]]; then
     echo "✅ Database restored successfully."
-
-    echo "🚀 Starting containers..."
-    sudo docker start $TARGET_CONTAINER
-    if [[ -n "$SECOND_CONTAINER" ]]; then
-      sudo docker start $SECOND_CONTAINER
-    fi
   else
     echo "❌ Database restore failed."
     exit 4
   fi
 else
   echo "✅ No fatal MongoDB error detected. No restore needed."
+fi
 
-  echo "🚀 Starting containers..."
-  sudo docker start $TARGET_CONTAINER
-  if [[ -n "$SECOND_CONTAINER" ]]; then
-    sudo docker start $SECOND_CONTAINER
-  fi
+echo "🚀 Starting containers..."
+sudo docker start $TARGET_CONTAINER
+if [[ -n "$SECOND_CONTAINER" ]]; then
+  sudo docker start $SECOND_CONTAINER
 fi
