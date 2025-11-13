@@ -93,9 +93,11 @@ if $ERROR_FOUND || [[ "$FORCE_RESTORE" == "true" ]]; then
   echo "🔁 Starting Mongo container..."
   sudo docker start $TARGET_CONTAINER
 
+  sleep 60
+  
   echo "⏳ Waiting for MongoDB to be ready..."
   until sudo docker logs $TARGET_CONTAINER 2>&1 | grep -q "Waiting for connections"; do
-    sleep 60
+    sleep 2
   done
 
   echo "♻️ Restoring database from /data/db/$DUMP_NAME ..."
