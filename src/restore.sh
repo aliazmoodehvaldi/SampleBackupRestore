@@ -5,28 +5,87 @@ base_path=$(echo $1 | sed 's/.*=//')
 
 FORCE_RESTORE=${FORCE_RESTORE:-false}
 
-LATEST_FILE=$(aws s3api list-objects-v2 \
-  --endpoint-url "$ENDPOINT_URL" \
-  --bucket "$S3_BUCKET" \
-  --prefix "$PROJECT_NAME" \
-  --query 'Contents[?starts_with(Key, `'"$PROJECT_NAME"'`)] | sort_by(@, &LastModified)[-1].Key' \
-  --output text)
+download_latest_backup () {
+    local profile=$1
+    local endpoint=$2
+    local bucket=$3
 
-if [[ "$LATEST_FILE" == "None" || -z "$LATEST_FILE" ]]; then
-  echo "❌ No file starting with '$PROJECT_NAME' found in bucket '$S3_BUCKET'."
-  exit 1
+    echo "📦 Checking bucket '$bucket' with profile '$profile'..."
+
+    LATEST_FILE=$(timeout 15 aws s3api list-objects-v2 \
+      --endpoint-url "$endpoint" \
+      --bucket "$bucket" \
+      --prefix "$PROJECT_NAME" \
+      --profile "$profile" \
+      --query 'Contents[?starts_with(Key, `'"$PROJECT_NAME"'`)] | sort_by(@, &LastModified)[-1].Key' \
+      --output text 2>/dev/null)
+
+    echo $LATEST_FILE
+    if [[ $? -ne 0 ]]; then
+        echo "⚠️ Could not connect to bucket '$bucket' with profile '$profile'. Skipping."
+        return 1
+    fi
+
+    if [[ -z "$LATEST_FILE" || "$LATEST_FILE" == "None" ]]; then
+        echo "⚠️ No backup file found in bucket '$bucket'. Skipping."
+        return 1
+    fi
+
+    echo "📦 Downloading latest backup: $LATEST_FILE from bucket '$bucket'"
+    timeout 30 aws s3 cp "s3://$bucket/$LATEST_FILE" ./backup.tar.gz --endpoint-url "$endpoint" --profile "$profile"
+    if [[ $? -ne 0 ]]; then
+        echo "⚠️ Failed to download backup from profile '$profile'. Trying next profile..."
+        return 1
+    fi
+
+    LATEST_FILE="./backup.tar.gz"
+    return 0
+}
+
+# --- Multi-Account handling ---
+if [[ "$MULTI_ACCOUNT" == "true" ]]; then
+    profiles=$(aws configure list-profiles)
+    backup_downloaded=false
+
+    for profile in $profiles; do
+        upper_profile=$(echo "$profile" | tr '[:lower:]' '[:upper:]')
+        endpoint_var="ENDPOINT_URL_${upper_profile}"
+        bucket_var="S3_BUCKET_${upper_profile}"
+
+        endpoint="${!endpoint_var}"
+        bucket="${!bucket_var}"
+
+        if [[ -z "$endpoint" || -z "$bucket" ]]; then
+            echo "⚠️ Profile '$profile' missing endpoint or bucket. Skipping."
+            continue
+        fi
+
+        download_latest_backup "$profile" "$endpoint" "$bucket"
+        if [[ $? -eq 0 ]]; then
+            echo "✅ Backup downloaded successfully from profile '$profile'."
+            backup_downloaded=true
+            break
+        fi
+    done
+
+    if [[ "$backup_downloaded" == "false" ]]; then
+        echo "❌ No backup could be downloaded from any profile."
+        exit 1
+    fi
+else
+    if [[ -z "$ENDPOINT_URL" || -z "$S3_BUCKET" ]]; then
+        echo "❌ ENDPOINT_URL or S3_BUCKET not defined."
+        exit 1
+    fi
+
+    download_latest_backup "default" "$ENDPOINT_URL" "$S3_BUCKET"
+    if [[ $? -ne 0 ]]; then
+        echo "❌ Failed to download backup."
+        exit 1
+    fi
 fi
 
-echo "📦 Downloading latest backup: $LATEST_FILE"
-aws s3 cp "s3://$S3_BUCKET/$LATEST_FILE" ./backup.tar.gz --endpoint-url "$ENDPOINT_URL"
-LATEST_FILE="./backup.tar.gz"
-
-if [[ $? -ne 0 ]]; then
-  echo "❌ Failed to download the file."
-  exit 2
-fi
-
-echo "✅ Backup downloaded successfully."
+echo "✅ Backup ready. Proceeding with restore..."
 
 # Stop containers
 sudo docker stop $TARGET_CONTAINER

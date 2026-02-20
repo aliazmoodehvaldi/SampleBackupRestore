@@ -32,18 +32,19 @@ sudo apt-get install cron
 3. Create a .env file in `/home/restore` and set the following environment variables:
 4. Grant execute access to scripts: `sudo chmod +x /home/restore/*.sh`
 
-| KEY                  | Type   | Required | Description                                  |
-|----------------------|--------|----------|----------------------------------------------|
-| S3_BUCKET            | String | true     | S3 bucket name                               |
-| ENDPOINT_URL         | String | true     | S3 endpoint url                              |
-| SCRIPT_PATH          | String | true     | Address of root scripts of the project       |
-| TARGET_PATH          | String | true     | The address of the restore path              |
-| PROJECT_NAME         | String | false    | Choosing project name for final restore file |
-| MONGO_USERNAME       | String | false    | MongoDB username                             |
-| MONGO_PASSWORD       | String | false    | MongoDB password                             |
-| FORCE_RESTORE        | Boolean| false    | Force Restore data with MongoRestore         |
-| TARGET_CONTAINER     | String | true     | Target docker container                      |
-| SECOND_CONTAINER     | String | false    | Second docker container                      |
+| KEY              | Type    | Required | Description                                          |
+| ---------------- | ------- | -------- | ---------------------------------------------------- |
+| S3_BUCKET        | String  | true     | S3 bucket name                                       |
+| ENDPOINT_URL     | String  | true     | S3 endpoint url                                      |
+| SCRIPT_PATH      | String  | true     | Address of root scripts of the project               |
+| TARGET_PATH      | String  | true     | The address of the restore path                      |
+| PROJECT_NAME     | String  | false    | Choosing project name for final restore file         |
+| MONGO_USERNAME   | String  | false    | MongoDB username                                     |
+| MONGO_PASSWORD   | String  | false    | MongoDB password                                     |
+| FORCE_RESTORE    | Boolean | false    | Force Restore data with MongoRestore                 |
+| TARGET_CONTAINER | String  | true     | Target docker container                              |
+| SECOND_CONTAINER | String  | false    | Second docker container                              |
+| MULTI_ACCOUNT    | Boolean | false    | Handle upload or delete old backup in multi storages |
 
 ### Example
 
@@ -66,4 +67,28 @@ Choose your preferred editor and add the following commands:
 
 ```shell
 0 1 * * * /home/restore/restore.sh --path=/home/restore >> /home/restore/restore-error.log 2>&1
+```
+
+# Multi-Account Storage
+
+To enable multi-account support, set the `MULTI_ACCOUNT` flag in your environment variables.
+
+## Example
+
+```shell
+MULTI_ACCOUNT=true
+```
+
+After enabling this setting, you need to register the `S3_BUCKET` and `ENDPOINT_URL` for each profile.
+
+## Example Profiles
+
+```shell
+# Default profile
+S3_BUCKET_DEFAULT=test
+ENDPOINT_URL_DEFAULT=https://s3.com
+
+# Second profile
+S3_BUCKET_SECONDPROFILE=test-2
+ENDPOINT_URL_SECONDPROFILE=https://s3.org
 ```
