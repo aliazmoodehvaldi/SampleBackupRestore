@@ -105,31 +105,38 @@ sudo rm -f "$LATEST_FILE"
 
 ERROR_FOUND=false
 
-if [[ "$FORCE_RESTORE" != "true" ]]; then
-  echo "⏳ Monitoring MongoDB logs..."
-  MAX_WAIT=120
-  COUNTER=0
+# Only monitor Mongo if MONGO_USERNAME is defined
+if [[ -n "$MONGO_USERNAME" ]]; then
 
-  while [[ $COUNTER -lt $MAX_WAIT ]]; do
-    LOGS=$(sudo docker logs $TARGET_CONTAINER 2>&1 | tail -n 50)
+  if [[ "$FORCE_RESTORE" != "true" ]]; then
+    echo "⏳ Monitoring MongoDB logs..."
+    MAX_WAIT=120
+    COUNTER=0
 
-    if echo "$LOGS" | grep -q "50883"; then
-      echo "⚠️ MongoDB fatal assertion 50883 detected."
-      ERROR_FOUND=true
-      break
-    fi
+    while [[ $COUNTER -lt $MAX_WAIT ]]; do
+      LOGS=$(sudo docker logs $TARGET_CONTAINER 2>&1 | tail -n 50)
 
-    if echo "$LOGS" | grep -q "Waiting for connections"; then
-      echo "✅ MongoDB started successfully."
-      break
-    fi
+      if echo "$LOGS" | grep -q "50883"; then
+        echo "⚠️ MongoDB fatal assertion 50883 detected."
+        ERROR_FOUND=true
+        break
+      fi
 
-    sleep 2
-    ((COUNTER+=2))
-  done
+      if echo "$LOGS" | grep -q "Waiting for connections"; then
+        echo "✅ MongoDB started successfully."
+        break
+      fi
+
+      sleep 2
+      ((COUNTER+=2))
+    done
+  else
+    echo "⚡ FORCE_RESTORE=true, skipping MongoDB log monitoring."
+    ERROR_FOUND=true
+  fi
+
 else
-  echo "⚡ FORCE_RESTORE=true, skipping MongoDB log monitoring."
-  ERROR_FOUND=true
+  echo "ℹ️ Mongo variables not set. Skipping MongoDB monitoring."
 fi
 
 
