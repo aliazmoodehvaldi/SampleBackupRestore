@@ -32,7 +32,7 @@ download_latest_backup () {
     fi
 
     echo "📦 Downloading latest backup: $LATEST_FILE from bucket '$bucket'"
-    timeout 30 aws s3 cp "s3://$bucket/$LATEST_FILE" ./backup.tar.gz --endpoint-url "$endpoint" --profile "$profile"
+    aws s3 cp "s3://$bucket/$LATEST_FILE" ./backup.tar.gz --endpoint-url "$endpoint" --profile "$profile" --no-progress --cli-read-timeout 0 --cli-connect-timeout 0
     if [[ $? -ne 0 ]]; then
         echo "⚠️ Failed to download backup from profile '$profile'. Trying next profile..."
         return 1
