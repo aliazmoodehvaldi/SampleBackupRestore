@@ -4,6 +4,7 @@ base_path=$(echo $1 | sed 's/.*=//')
 . "$base_path/utils/init.sh" $base_path
 
 FORCE_RESTORE=${FORCE_RESTORE:-false}
+MONGO_DATABASE=${MONGO_DATABASE:-"vidprotect"}  # Default database name
 
 download_latest_backup () {
     local profile=$1
@@ -38,7 +39,7 @@ download_latest_backup () {
         return 1
     fi
 
-    LATEST_FILE="./backup.tar.gz"
+    DOWNLOADED_FILE="./backup.tar.gz"
     return 0
 }
 
@@ -87,21 +88,25 @@ fi
 
 echo "✅ Backup ready. Proceeding with restore..."
 
-# Stop containers
+# Stop containers with proper waiting
+echo "🛑 Stopping containers..."
 sudo docker stop $TARGET_CONTAINER
+sudo docker wait $TARGET_CONTAINER 2>/dev/null || true
+
 if [[ -n "$SECOND_CONTAINER" ]]; then
-  sudo docker stop $SECOND_CONTAINER
+    sudo docker stop $SECOND_CONTAINER
+    sudo docker wait $SECOND_CONTAINER 2>/dev/null || true
 fi
 
 echo "🔄 Extracting backup..."
-sudo tar -xzf "$LATEST_FILE"
+sudo tar -xzf "$DOWNLOADED_FILE"
 
 echo "🧹 Replacing target path..."
 sudo rm -rf "$TARGET_PATH"
 sudo mkdir -p "$TARGET_PATH"
 sudo cp -R ".$TARGET_PATH" "$(dirname "$TARGET_PATH")"
 sudo rm -rf "./$(echo "$TARGET_PATH" | cut -d'/' -f2)"
-sudo rm -f "$LATEST_FILE"
+sudo rm -f "$DOWNLOADED_FILE"
 
 ERROR_FOUND=false
 
@@ -139,7 +144,6 @@ else
   echo "ℹ️ Mongo variables not set. Skipping MongoDB monitoring."
 fi
 
-
 if $ERROR_FOUND || [[ "$FORCE_RESTORE" == "true" ]]; then
   echo "⚠️ Starting recovery mode..."
 
@@ -159,24 +163,57 @@ if $ERROR_FOUND || [[ "$FORCE_RESTORE" == "true" ]]; then
   echo "🔁 Starting Mongo container..."
   sudo docker start $TARGET_CONTAINER
 
-  sleep 60
-  
+  # Wait for container to be fully ready
   echo "⏳ Waiting for MongoDB to be ready..."
-  until sudo docker logs $TARGET_CONTAINER 2>&1 | grep -q "Waiting for connections"; do
+  MAX_RETRIES=30
+  RETRY_COUNT=0
+  while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
+    if sudo docker logs $TARGET_CONTAINER 2>&1 | grep -q "Waiting for connections"; then
+      echo "✅ MongoDB is ready."
+      break
+    fi
     sleep 2
+    ((RETRY_COUNT++))
   done
 
+  if [[ $RETRY_COUNT -eq $MAX_RETRIES ]]; then
+    echo "❌ MongoDB failed to start within timeout."
+    exit 5
+  fi
+
   echo "♻️ Restoring database from /data/db/$DUMP_NAME ..."
+  
+  # Drop existing collections first to avoid conflicts
+  echo "🗑️ Dropping existing collections (if any)..."
+  sudo docker exec $TARGET_CONTAINER mongosh \
+    --authenticationDatabase admin -u $MONGO_USERNAME -p $MONGO_PASSWORD \
+    --eval "db.getSiblingDB('$MONGO_DATABASE').getCollectionNames().forEach(function(c) { if (!c.startsWith('system.')) db.getSiblingDB('$MONGO_DATABASE')[c].drop() })" \
+    --quiet 2>/dev/null || true
+
+  # Try restore with --drop flag to replace existing collections
   sudo docker exec $TARGET_CONTAINER mongorestore --verbose \
     --archive=/data/db/$DUMP_NAME \
-    --authenticationDatabase admin -u $MONGO_USERNAME -p $MONGO_PASSWORD
+    --authenticationDatabase admin -u $MONGO_USERNAME -p $MONGO_PASSWORD \
+    --drop \
+    --nsInclude="${MONGO_DATABASE}.*" 2>&1 | tee /tmp/mongorestore.log
 
-  if [[ $? -eq 0 ]]; then
-    echo "✅ Database restored successfully."
+  # Check if restore was successful (ignoring namespace exists errors)
+  if [[ ${PIPESTATUS[0]} -eq 0 ]] || grep -q "Collection already exists" /tmp/mongorestore.log; then
+    # Verify documents were restored
+    DOCS_RESTORED=$(grep -o "[0-9]\+ document(s) restored successfully" /tmp/mongorestore.log | tail -1 | grep -o "[0-9]\+")
+    if [[ -n "$DOCS_RESTORED" && "$DOCS_RESTORED" -gt 0 ]]; then
+      echo "✅ Database restored successfully. $DOCS_RESTORED documents restored."
+    else
+      echo "⚠️ Restore completed but no documents were restored. Check logs."
+    fi
   else
-    echo "❌ Database restore failed."
+    echo "❌ Database restore failed. Check /tmp/mongorestore.log for details."
     exit 4
   fi
+
+  # Clean up log file
+  sudo rm -f /tmp/mongorestore.log
+
 else
   echo "✅ No fatal MongoDB error detected. No restore needed."
 fi
@@ -186,3 +223,5 @@ sudo docker start $TARGET_CONTAINER
 if [[ -n "$SECOND_CONTAINER" ]]; then
   sudo docker start $SECOND_CONTAINER
 fi
+
+echo "✅ Restore process completed successfully!"
