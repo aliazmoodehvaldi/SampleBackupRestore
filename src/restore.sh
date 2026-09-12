@@ -323,7 +323,6 @@ restore_database_incremental() {
         --authenticationDatabase admin \
         --port 27017 \
         -u $MONGO_USERNAME -p $MONGO_PASSWORD \
-        --nsInclude="${MONGO_DATABASE}.*" \
         < "$BACKUP_DUMP_PATH" 2>&1 | tee /tmp/mongorestore.log
 
     if [[ ${PIPESTATUS[0]} -eq 0 ]] || grep -q "Collection already exists" /tmp/mongorestore.log; then
