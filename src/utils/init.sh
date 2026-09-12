@@ -20,7 +20,6 @@ fi
 # Define the list of common environment variable names
 env_variables=(
     "FORCE_FULL_OVERRIDE"
-    "BACKUP_DUMP_PATH"
     "SECOND_CONTAINER"
     "TARGET_CONTAINER"
     "MONGO_USERNAME"
