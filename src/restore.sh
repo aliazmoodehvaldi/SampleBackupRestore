@@ -4,7 +4,6 @@ base_path=$(echo $1 | sed 's/.*=//')
 . "$base_path/utils/init.sh" $base_path
 
 FORCE_RESTORE=${FORCE_RESTORE:-false}
-MONGO_DATABASE=${MONGO_DATABASE:-"vidprotect"}
 
 BACKUP_RESTORED=false
 RESTORE_ERROR=false
@@ -90,12 +89,18 @@ fi
 
 echo "✅ Backup ready. Proceeding with restore..."
 
-if [[ -d "$TARGET_PATH" ]]; then
-    CURRENT_BACKUP_PATH="${TARGET_PATH}_backup_$(date +%Y%m%d_%H%M%S)"
-    sudo cp -R "$TARGET_PATH" "$CURRENT_BACKUP_PATH"
-    echo "✅ Current data saved to: $CURRENT_BACKUP_PATH"
+# Backup current TARGET_PATH only in full override mode
+if [[ "$FORCE_FULL_OVERRIDE" == "true" ]]; then
+    if [[ -d "$TARGET_PATH" ]]; then
+        CURRENT_BACKUP_PATH="${TARGET_PATH}_backup_$(date +%Y%m%d_%H%M%S)"
+        sudo cp -R "$TARGET_PATH" "$CURRENT_BACKUP_PATH"
+        echo "✅ Current data saved to: $CURRENT_BACKUP_PATH"
+    else
+        echo "ℹ️ No existing data to backup."
+        CURRENT_BACKUP_PATH=""
+    fi
 else
-    echo "ℹ️ No existing data to backup."
+    echo "ℹ️ FORCE_FULL_OVERRIDE=false → skipping full data backup."
     CURRENT_BACKUP_PATH=""
 fi
 
@@ -108,15 +113,36 @@ if [[ -n "$SECOND_CONTAINER" ]]; then
     sudo docker wait $SECOND_CONTAINER 2>/dev/null || true
 fi
 
-echo "🔄 Extracting backup..."
-sudo tar -xzf "$DOWNLOADED_FILE"
+# Extract + replace TARGET_PATH ONLY in full override mode
+if [[ "$FORCE_FULL_OVERRIDE" == "true" ]]; then
+    echo "🔄 Extracting backup..."
+    sudo tar -xzf "$DOWNLOADED_FILE"
 
-echo "🧹 Replacing target path..."
-sudo rm -rf "$TARGET_PATH"
-sudo mkdir -p "$TARGET_PATH"
-sudo cp -R ".$TARGET_PATH" "$(dirname "$TARGET_PATH")"
-sudo rm -rf "./$(echo "$TARGET_PATH" | cut -d'/' -f2)"
-sudo rm -f "$DOWNLOADED_FILE"
+    echo "🧹 Replacing target path..."
+    sudo rm -rf "$TARGET_PATH"
+    sudo mkdir -p "$TARGET_PATH"
+    sudo cp -R ".$TARGET_PATH" "$(dirname "$TARGET_PATH")"
+    sudo rm -rf "./$(echo "$TARGET_PATH" | cut -d'/' -f2)"
+    sudo rm -f "$DOWNLOADED_FILE"
+else
+    echo "ℹ️ FORCE_FULL_OVERRIDE=false → extracting backup for archive access only..."
+
+    # Extract to a temp dir so we can access the archive file, without touching $TARGET_PATH
+    TEMP_EXTRACT_DIR=$(mktemp -d)
+    sudo tar -xzf "$DOWNLOADED_FILE" -C "$TEMP_EXTRACT_DIR"
+
+    # Auto-detect the dump/archive file
+    BACKUP_DUMP_PATH=$(find "$TEMP_EXTRACT_DIR" -type f \( -name "*.dump" \) | head -n 1)
+
+    if [[ -z "$BACKUP_DUMP_PATH" || ! -f "$BACKUP_DUMP_PATH" ]]; then
+        echo "❌ Could not locate a dump/archive file in the backup."
+        sudo rm -rf "$TEMP_EXTRACT_DIR"
+        exit 1
+    fi
+
+    echo "📄 Archive located at: $BACKUP_DUMP_PATH"
+    sudo rm -f "$DOWNLOADED_FILE"
+fi
 
 ERROR_FOUND=false
 
@@ -153,9 +179,13 @@ else
   echo "ℹ️ Mongo variables not set. Skipping MongoDB monitoring."
 fi
 
+
+# ============================================================
+# ORIGINAL restore_database (full override mode)
+# ============================================================
 restore_database() {
     local DUMP_FILE=$(find "$TARGET_PATH" -type f -name "*.dump" | head -n 1)
-    
+
     if [[ -z "$DUMP_FILE" ]]; then
         echo "❌ No dump file found in $TARGET_PATH."
         return 1
@@ -188,12 +218,23 @@ restore_database() {
     fi
 
     echo "♻️ Restoring database from /data/db/$DUMP_NAME ..."
-    
-    echo "🗑️ Dropping existing collections (if any)..."
-    sudo docker exec $TARGET_CONTAINER mongosh \
-        --authenticationDatabase admin -u $MONGO_USERNAME -p $MONGO_PASSWORD \
-        --eval "db.getSiblingDB('$MONGO_DATABASE').getCollectionNames().forEach(function(c) { if (!c.startsWith('system.')) db.getSiblingDB('$MONGO_DATABASE')[c].drop() })" \
-        --quiet 2>/dev/null || true
+
+    MONGO_SHELL=""
+    if sudo docker exec $TARGET_CONTAINER which mongosh >/dev/null 2>&1; then
+        MONGO_SHELL="mongosh"
+    elif sudo docker exec $TARGET_CONTAINER which mongo >/dev/null 2>&1; then
+        MONGO_SHELL="mongo"
+    fi
+
+    if [[ -n "$MONGO_SHELL" ]]; then
+        echo "🗑️ Dropping existing collections (if any)..."
+        sudo docker exec $TARGET_CONTAINER $MONGO_SHELL \
+            --authenticationDatabase admin -u $MONGO_USERNAME -p $MONGO_PASSWORD \
+            --eval "db.getSiblingDB('$MONGO_DATABASE').getCollectionNames().forEach(function(c) { if (!c.startsWith('system.')) db.getSiblingDB('$MONGO_DATABASE')[c].drop() })" \
+            --quiet 2>/dev/null || true
+    else
+        echo "ℹ️ No mongo shell found; relying on --drop flag."
+    fi
 
     sudo docker exec $TARGET_CONTAINER mongorestore --verbose \
         --archive=/data/db/$DUMP_NAME \
@@ -217,45 +258,155 @@ restore_database() {
     fi
 }
 
+
+# ============================================================
+# Incremental restore (drop collections + mongorestore --archive)
+# ============================================================
+restore_database_incremental() {
+    if [[ -z "$BACKUP_DUMP_PATH" ]]; then
+        echo "❌ BACKUP_DUMP_PATH is not set."
+        return 1
+    fi
+
+    if [[ ! -f "$BACKUP_DUMP_PATH" ]]; then
+        echo "❌ Backup file not found: $BACKUP_DUMP_PATH"
+        return 1
+    fi
+
+    echo "📄 Using backup archive: $BACKUP_DUMP_PATH"
+
+    echo "🔁 Starting Mongo container..."
+    sudo docker start $TARGET_CONTAINER
+
+    echo "⏳ Waiting for MongoDB to be ready..."
+    MAX_RETRIES=30
+    RETRY_COUNT=0
+    while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
+        if sudo docker logs $TARGET_CONTAINER 2>&1 | grep -q "Waiting for connections"; then
+            echo "✅ MongoDB is ready."
+            break
+        fi
+        sleep 2
+        ((RETRY_COUNT++))
+    done
+
+    if [[ $RETRY_COUNT -eq $MAX_RETRIES ]]; then
+        echo "❌ MongoDB failed to start within timeout."
+        return 1
+    fi
+
+    echo "🗑️ Dropping existing collections in '$MONGO_DATABASE'..."
+
+    MONGO_SHELL=""
+    if sudo docker exec $TARGET_CONTAINER which mongosh >/dev/null 2>&1; then
+        MONGO_SHELL="mongosh"
+    elif sudo docker exec $TARGET_CONTAINER which mongo >/dev/null 2>&1; then
+        MONGO_SHELL="mongo"
+    fi
+
+    if [[ -n "$MONGO_SHELL" ]]; then
+        sudo docker exec $TARGET_CONTAINER $MONGO_SHELL \
+            --authenticationDatabase admin -u $MONGO_USERNAME -p $MONGO_PASSWORD \
+            --eval "db.getSiblingDB('$MONGO_DATABASE').getCollectionNames().forEach(function(c) { if (!c.startsWith('system.')) db.getSiblingDB('$MONGO_DATABASE')[c].drop() })" \
+            --quiet 2>/dev/null || true
+        echo "✅ Collections dropped."
+    else
+        echo "❌ No mongo shell found. Cannot drop collections."
+        return 1
+    fi
+
+    echo "♻️ Restoring database from archive via stdin..."
+
+    # Pipe the archive into the container via stdin
+    sudo docker exec -i $TARGET_CONTAINER mongorestore --verbose \
+        --archive \
+        --authenticationDatabase admin \
+        --port 27017 \
+        -u $MONGO_USERNAME -p $MONGO_PASSWORD \
+        --nsInclude="${MONGO_DATABASE}.*" \
+        < "$BACKUP_DUMP_PATH" 2>&1 | tee /tmp/mongorestore.log
+
+    if [[ ${PIPESTATUS[0]} -eq 0 ]] || grep -q "Collection already exists" /tmp/mongorestore.log; then
+        DOCS_RESTORED=$(grep -o "[0-9]\+ document(s) restored successfully" /tmp/mongorestore.log | tail -1 | grep -o "[0-9]\+")
+        if [[ -n "$DOCS_RESTORED" && "$DOCS_RESTORED" -gt 0 ]]; then
+            echo "✅ Database restored successfully. $DOCS_RESTORED documents restored."
+            BACKUP_RESTORED=true
+            return 0
+        else
+            echo "⚠️ Restore completed but no documents were restored."
+            return 1
+        fi
+    else
+        echo "❌ Database restore failed."
+        return 1
+    fi
+}
+
+
+# ============================================================
+# Decision block now branches on FORCE_FULL_OVERRIDE
+# ============================================================
 if $ERROR_FOUND || [[ "$FORCE_RESTORE" == "true" ]]; then
     echo "⚠️ Starting recovery mode..."
-    
-    if restore_database; then
+
+    RESTORE_OK=false
+
+    if [[ "$FORCE_FULL_OVERRIDE" == "true" ]]; then
+        echo "🔁 FORCE_FULL_OVERRIDE=true → full override mode."
+        if restore_database; then
+            RESTORE_OK=true
+        fi
+    else
+        echo "🔁 FORCE_FULL_OVERRIDE=false → incremental restore (drop + mongorestore)."
+        if restore_database_incremental; then
+            RESTORE_OK=true
+        fi
+    fi
+
+    if [[ "$RESTORE_OK" == "true" ]]; then
         echo "✅ New database restored successfully!"
     else
         echo "❌ Failed to restore new database."
         RESTORE_ERROR=true
-        
+
         echo "🔄 Attempting to restore previous database state..."
-        
+
         if [[ -n "$CURRENT_BACKUP_PATH" && -d "$CURRENT_BACKUP_PATH" ]]; then
             echo "📂 Previous data found at: $CURRENT_BACKUP_PATH"
-            
+
             echo "🛑 Stopping containers..."
             sudo docker stop $TARGET_CONTAINER
             sudo docker wait $TARGET_CONTAINER 2>/dev/null || true
-            
+
             if [[ -n "$SECOND_CONTAINER" ]]; then
                 sudo docker stop $SECOND_CONTAINER
                 sudo docker wait $SECOND_CONTAINER 2>/dev/null || true
             fi
-            
+
             echo "🧹 Restoring previous data..."
             sudo rm -rf "$TARGET_PATH"
             sudo cp -R "$CURRENT_BACKUP_PATH" "$TARGET_PATH"
-            
+
             sudo rm -rf "$CURRENT_BACKUP_PATH"
-            
+
             echo "🚀 Starting containers with previous data..."
             sudo docker start $TARGET_CONTAINER
             if [[ -n "$SECOND_CONTAINER" ]]; then
                 sudo docker start $SECOND_CONTAINER
             fi
-            
+
             echo "✅ Previous data restored successfully as fallback."
+
+            # Clean up temp extract dir if it exists
+            [[ -n "$TEMP_EXTRACT_DIR" && -d "$TEMP_EXTRACT_DIR" ]] && sudo rm -rf "$TEMP_EXTRACT_DIR"
+
             exit 0
         else
             echo "❌ No previous data backup available. Cannot rollback."
+
+            # Clean up temp extract dir if it exists
+            [[ -n "$TEMP_EXTRACT_DIR" && -d "$TEMP_EXTRACT_DIR" ]] && sudo rm -rf "$TEMP_EXTRACT_DIR"
+
             exit 4
         fi
     fi
@@ -270,6 +421,12 @@ if [[ "$BACKUP_RESTORED" == "true" && -n "$CURRENT_BACKUP_PATH" && -d "$CURRENT_
 fi
 
 sudo rm -f /tmp/mongorestore.log
+
+# Clean up temp extract dir if it exists
+if [[ -n "$TEMP_EXTRACT_DIR" && -d "$TEMP_EXTRACT_DIR" ]]; then
+    echo "🧹 Cleaning up temporary extraction directory..."
+    sudo rm -rf "$TEMP_EXTRACT_DIR"
+fi
 
 echo "🚀 Starting containers..."
 sudo docker start $TARGET_CONTAINER
