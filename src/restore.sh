@@ -320,7 +320,10 @@ restore_database_incremental() {
     # Pipe the archive into the container via stdin
     sudo docker exec -i $TARGET_CONTAINER mongorestore --verbose \
         --archive \
-         --noAuthSchemaChec \
+        --drop \
+        --nsInclude 'admin.system.version' \
+        --nsFrom 'admin.system.version' \
+        --nsTo 'test.system_version_inspect' \
         --authenticationDatabase admin \
         --port 27017 \
         -u $MONGO_USERNAME -p $MONGO_PASSWORD \
