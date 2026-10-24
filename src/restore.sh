@@ -8,6 +8,65 @@ FORCE_RESTORE=${FORCE_RESTORE:-false}
 BACKUP_RESTORED=false
 RESTORE_ERROR=false
 
+# ============================================================
+# Guarantee containers are started in ALL exit scenarios (trap EXIT)
+# ============================================================
+ensure_containers_started() {
+    local exit_code=$?
+
+    # Prevent double execution
+    if [[ "${CONTAINERS_STARTED_GUARANTEED:-false}" == "true" ]]; then
+        exit $exit_code
+    fi
+    CONTAINERS_STARTED_GUARANTEED=true
+
+    echo "🔒 ensure_containers_started triggered (exit_code=$exit_code)"
+
+    # Start primary container
+    if [[ -n "$TARGET_CONTAINER" ]]; then
+        if ! sudo docker start "$TARGET_CONTAINER" >/dev/null 2>&1; then
+            echo "⚠️ docker start $TARGET_CONTAINER failed in trap, retrying..."
+            sleep 2
+            if sudo docker start "$TARGET_CONTAINER" >/dev/null 2>&1; then
+                echo "✅ $TARGET_CONTAINER started on retry (trap)."
+            else
+                echo "❌ Could not start $TARGET_CONTAINER even in trap."
+            fi
+        else
+            echo "✅ $TARGET_CONTAINER started (trap)."
+        fi
+    fi
+
+    # Start secondary container (if defined)
+    if [[ -n "$SECOND_CONTAINER" ]]; then
+        if ! sudo docker start "$SECOND_CONTAINER" >/dev/null 2>&1; then
+            echo "⚠️ docker start $SECOND_CONTAINER failed in trap, retrying..."
+            sleep 2
+            if sudo docker start "$SECOND_CONTAINER" >/dev/null 2>&1; then
+                echo "✅ $SECOND_CONTAINER started on retry (trap)."
+            else
+                echo "❌ Could not start $SECOND_CONTAINER even in trap."
+            fi
+        else
+            echo "✅ $SECOND_CONTAINER started (trap)."
+        fi
+    fi
+
+    # Cleanup temp files
+    [[ -n "$TEMP_EXTRACT_DIR" && -d "$TEMP_EXTRACT_DIR" ]] && sudo rm -rf "$TEMP_EXTRACT_DIR"
+    sudo rm -f /tmp/mongorestore.log 2>/dev/null || true
+
+    exit $exit_code
+}
+
+# Register traps: EXIT guarantees container start, INT/TERM exit gracefully
+trap ensure_containers_started EXIT
+trap 'echo "⚠️ Received signal, exiting..."; exit 1' INT TERM
+
+# Disable errexit so we always reach the trap
+set +e
+
+
 download_latest_backup () {
     local profile=$1
     local endpoint=$2
@@ -136,7 +195,6 @@ else
 
     if [[ -z "$BACKUP_DUMP_PATH" || ! -f "$BACKUP_DUMP_PATH" ]]; then
         echo "❌ Could not locate a dump/archive file in the backup."
-        sudo rm -rf "$TEMP_EXTRACT_DIR"
         exit 1
     fi
 
@@ -438,3 +496,4 @@ if [[ -n "$SECOND_CONTAINER" ]]; then
 fi
 
 echo "✅ Restore process completed successfully!"
+exit 0
