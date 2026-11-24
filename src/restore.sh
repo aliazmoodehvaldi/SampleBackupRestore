@@ -298,7 +298,8 @@ restore_database() {
         --archive=/data/db/$DUMP_NAME \
         --authenticationDatabase admin -u $MONGO_USERNAME -p $MONGO_PASSWORD \
         --drop \
-        --nsInclude="${MONGO_DATABASE}.*" 2>&1 | tee /tmp/mongorestore.log
+        --nsInclude="${MONGO_DATABASE}.*" \ 
+        --nsExclude="admin.system.*" 2>&1 | tee /tmp/mongorestore.log
 
     if [[ ${PIPESTATUS[0]} -eq 0 ]] || grep -q "Collection already exists" /tmp/mongorestore.log; then
         DOCS_RESTORED=$(grep -o "[0-9]\+ document(s) restored successfully" /tmp/mongorestore.log | tail -1 | grep -o "[0-9]\+")
@@ -379,9 +380,8 @@ restore_database_incremental() {
     sudo docker exec -i $TARGET_CONTAINER mongorestore --verbose \
         --archive \
         --drop \
-        --nsInclude 'admin.system.version' \
-        --nsFrom 'admin.system.version' \
-        --nsTo 'test.system_version_inspect' \
+        --nsInclude="${MONGO_DATABASE}.*" \
+        --nsExclude="admin.system.*" \
         --authenticationDatabase admin \
         --port 27017 \
         -u $MONGO_USERNAME -p $MONGO_PASSWORD \
